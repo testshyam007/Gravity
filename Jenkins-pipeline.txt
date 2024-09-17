@@ -1,0 +1,66 @@
+pipeline {
+    agent any
+
+    environment {
+        // EC2 instance details
+        EC2_USER = 'ubuntu'
+        EC2_HOST = '<172.168.10.0>'
+        PEM_FILE = '/home/keys/key.pem'
+        APP_DIR = '/home/ubuntu/myapp'
+
+        // Git repo details
+        GIT_REPO = 'https://github.com/node-hello.git'
+        BRANCH = 'main'
+    }
+
+    options {
+        timeout(time: 10, unit: 'MINUTES') // Timeout after 10 minutes
+        retry(2)  // Retry the pipeline 2 times on failure
+        disableConcurrentBuilds() // Prevent multiple concurrent runs
+    }
+
+    stages {
+        // Stage 1: Checkout the source code from the Git repository
+        stage('Clone Repository') {
+            steps {
+                echo 'Cloning repository...'
+                git branch: "${BRANCH}", url: "${GIT_REPO}"
+            }
+        }
+
+        // Stage 2: Install dependencies for the project
+        stage('Install Dependencies') {
+            steps {
+                echo 'Installing project dependencies...'
+                sh 'npm install'  // Install Node.js dependencies
+            }
+        }
+
+        // Stage 3: Run automated tests and ensure they pass before proceeding
+        stage('Run Tests') {
+            steps {
+                echo 'Running tests...'
+                sh 'npm test'  // Run the test suite
+            }
+        }
+
+        // Stage 4: Deploy the application to the EC2 instance using SSH
+        stage('Deploy to EC2') {
+            steps {
+                echo 'Deploying to EC2...'
+                sshagent(credentials: ["id_name_added_underManageCredential"]) {
+                    sh "ssh -v ubuntu@172.168.10.0"
+                    echo 'Stopping the application on the EC2 instance...'
+                    ssh -o StrictHostKeyChecking=no -i ${PEM_FILE} ${EC2_USER}@${EC2_HOST} "pm2 stop all || true"
+
+                    echo 'Transferring new build to EC2...'
+                    scp -i ${PEM_FILE} -r * ${EC2_USER}@${EC2_HOST}:${APP_DIR}
+
+                    echo 'Installing new dependencies and starting the application...'
+                    ssh -o StrictHostKeyChecking=no -i ${PEM_FILE} ${EC2_USER}@${EC2_HOST} "cd ${APP_DIR} && npm install && pm2 start index.js"
+                    """
+                }
+            }
+        }
+    }
+}
